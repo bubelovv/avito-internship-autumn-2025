@@ -16,7 +16,7 @@
 ## База данных
 - PostgreSQL 18 (образ `postgres:18-alpine`).
 - Миграции (`internal/migrations/sql/*.sql`) запускаются автоматически при старте сервиса.
-- Таблицы: `teams`, `users`, `team_memberships`, `pull_requests`, `pr_reviewers`, `schema_migrations`.
+- Таблицы: `teams`, `users`, `team_memberships`, `pull_requests`, `pull_request_statuses`, `pr_reviewers`, `schema_migrations`.
 - Данные хранятся в volume `pgdata` (каталог `/var/lib/postgresql/data/pgdata` внутри контейнера).
 
 ## Допущения и решения

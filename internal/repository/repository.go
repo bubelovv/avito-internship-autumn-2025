@@ -13,6 +13,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+const (
+	prStatusOpenID   = 1
+	prStatusMergedID = 2
+)
+
 var (
 	ErrTeamExists          = errors.New("team already exists")
 	ErrTeamNotFound        = errors.New("team not found")
@@ -147,12 +152,13 @@ func (r *Repository) UpsertMembership(ctx context.Context, tx pgx.Tx, teamID int
 		return errTxRequired
 	}
 
+	if _, err := tx.Exec(ctx, `DELETE FROM team_memberships WHERE user_id = $1`, userID); err != nil {
+		return fmt.Errorf("delete previous membership: %w", err)
+	}
+
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO team_memberships (team_id, user_id)
 		VALUES ($1, $2)
-		ON CONFLICT (user_id)
-		DO UPDATE SET team_id = EXCLUDED.team_id,
-		             joined_at = NOW()
 	`, teamID, userID); err != nil {
 		return fmt.Errorf("upsert membership: %w", err)
 	}
@@ -235,10 +241,10 @@ func (r *Repository) CreatePullRequest(ctx context.Context, tx pgx.Tx, pr domain
 
 	var createdAt time.Time
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO pull_requests (pull_request_id, pull_request_name, author_id, status)
+		INSERT INTO pull_requests (pull_request_id, pull_request_name, author_id, status_id)
 		VALUES ($1, $2, $3, $4)
 		RETURNING created_at
-	`, pr.ID, pr.Name, pr.AuthorID, string(pr.Status)).Scan(&createdAt); err != nil {
+	`, pr.ID, pr.Name, pr.AuthorID, prStatusOpenID).Scan(&createdAt); err != nil {
 		if isUniqueViolation(err) {
 			return domain.PullRequest{}, ErrPullRequestExists
 		}
@@ -251,9 +257,15 @@ func (r *Repository) CreatePullRequest(ctx context.Context, tx pgx.Tx, pr domain
 
 func (r *Repository) GetPullRequest(ctx context.Context, prID string) (domain.PullRequest, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT pull_request_id, pull_request_name, author_id, status, created_at, merged_at
-		FROM pull_requests
-		WHERE pull_request_id = $1
+		SELECT pr.pull_request_id,
+		       pr.pull_request_name,
+		       pr.author_id,
+		       s.code,
+		       pr.created_at,
+		       pr.merged_at
+		FROM pull_requests pr
+		JOIN pull_request_statuses s ON s.status_id = pr.status_id
+		WHERE pr.pull_request_id = $1
 	`, prID)
 
 	var pr domain.PullRequest
@@ -368,10 +380,10 @@ func (r *Repository) MarkPullRequestMerged(ctx context.Context, tx pgx.Tx, prID 
 
 	tag, err := tx.Exec(ctx, `
 		UPDATE pull_requests
-		SET status = $2,
+		SET status_id = $2,
 		    merged_at = COALESCE(merged_at, $3)
 		WHERE pull_request_id = $1
-	`, prID, string(domain.PullRequestStatusMerged), mergedAt)
+	`, prID, prStatusMergedID, mergedAt)
 	if err != nil {
 		return fmt.Errorf("update pull request status: %w", err)
 	}
@@ -384,9 +396,13 @@ func (r *Repository) MarkPullRequestMerged(ctx context.Context, tx pgx.Tx, prID 
 
 func (r *Repository) ListPullRequestsForReviewer(ctx context.Context, userID string) ([]domain.PullRequestShort, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT pr.pull_request_id, pr.pull_request_name, pr.author_id, pr.status
+		SELECT pr.pull_request_id,
+		       pr.pull_request_name,
+		       pr.author_id,
+		       s.code
 		FROM pr_reviewers rr
 		JOIN pull_requests pr ON pr.pull_request_id = rr.pull_request_id
+		JOIN pull_request_statuses s ON s.status_id = pr.status_id
 		WHERE rr.reviewer_id = $1
 		ORDER BY pr.created_at DESC
 	`, userID)
