@@ -1,0 +1,32 @@
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: avito
+      POSTGRES_USER: avito
+      POSTGRES_PASSWORD: avito
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      HTTP_PORT: "8080"
+      DATABASE_URL: postgres://avito:avito@db:5432/avito?sslmode=disable
+      LOG_LEVEL: debug
+      SHUTDOWN_TIMEOUT: 10s
+    ports:
+      - "${APP_HOST_PORT:-8080}:8080"
+
+volumes:
+  pgdata: {}
